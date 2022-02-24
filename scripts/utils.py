@@ -5,9 +5,8 @@ import pickle
 import torch
 
 def sample_demo(X, n):
-    N = len(X)
+    N = len(X['obs'])
     rt = np.random.randint(N, size= n)
-    print(rt)
     return X['obs'][rt], X['act'][rt], X['nobs'][rt]
 
 def sample_batch(X, n):
@@ -37,9 +36,7 @@ def load_demo(file_name):
     rt_act = []
     rt_nobs = []
     n_epi = len(obs)
-    print(n_epi)
     for i_epi in range(n_epi):
-        print(i_epi)
         epi_len = len(obs[i_epi])
         for i in range(epi_len):
             rt_obs.append(obs[i_epi][i])

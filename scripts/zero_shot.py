@@ -45,6 +45,13 @@ if __name__ == "__main__":
     exp_policy_file_name_ = args['exp_policy_file_name']
     exp_policy_file_ = POLICY_PATH + exp_policy_file_name_ + ".pt"
 
+    f_hidden_layers_ = args['f_hidden_layers']
+    g_hidden_layers_ = args['g_hidden_layers']
+    f_options_ = args['f_options']
+    g_options_ = args['g_options']
+
+    learning_rate_ = args['learning_rate']
+
     n_episode_ = args['n_episode']
     max_epi_len_ = args['lea_epi_len']
 
@@ -54,17 +61,19 @@ if __name__ == "__main__":
 
     # load saved policy
     pi = torch.load(exp_policy_file_)
-    f = torch.load(result_path_ + "f.pt")
-    g = torch.load(result_path_ + "g.pt")
+    f = MLP(lea_obs_dim_ - lea_goal_dim_, exp_obs_dim_ - exp_goal_dim_, f_hidden_layers_, learning_rate_, device_, f_options_)
+    g = MLP(exp_act_dim_, lea_act_dim_, g_hidden_layers_, learning_rate_, device_, g_options_)
+    f.load_state_dict(torch.load(result_path_ + "f.pt"))
+    g.load_state_dict(torch.load(result_path_ + "g.pt"))
     
     def get_action(x):
         with torch.no_grad():
             x = torch.as_tensor(x, dtype=torch.float32)
-            x_goal = x[:,lea_goal_offset_:lea_goal_offset_ + lea_goal_dim_]
-            x = torch.cat((x[:,:lea_goal_offset_], x[:,lea_goal_offset_ + lea_goal_dim_:]), 1)
+            x_goal = x[lea_goal_offset_:lea_goal_offset_ + lea_goal_dim_]
+            x = torch.cat((x[:lea_goal_offset_], x[lea_goal_offset_ + lea_goal_dim_:]))
             x = f(x)
-            x = torch.cat((x[:,:exp_goal_offset_], x_goal, x[:,exp_goal_offset_:]), 1)
-            action = pi(x)
+            x = torch.cat((x[:exp_goal_offset_], x_goal, x[exp_goal_offset_:]))
+            action = pi.act(x)
         return action
     
     o, r, d, ep_ret, ep_len, n = env_.reset(), 0, False, 0, 0, 0
@@ -83,3 +92,4 @@ if __name__ == "__main__":
             o = env_.reset()
             ep_ret = 0
             ep_len = 0
+    print("# of episodes: %d, avg EpRet: %.3f" %(n_episode_, tot_ep_ret / n_episode_))

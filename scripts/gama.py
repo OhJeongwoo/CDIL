@@ -40,6 +40,7 @@ if __name__ == "__main__":
     exp_goal_dim_ = args['exp_goal_dim']
 
     lea_env_name_ = args['lea_env_name']
+    lea_epi_len_ = args['exp_epi_len']
     lea_obs_dim_, lea_act_dim_ = get_env_dim(lea_env_name_)
     lea_goal_ = args['lea_goal']
     lea_goal_offset_ = args['lea_goal_offset']
@@ -47,6 +48,8 @@ if __name__ == "__main__":
     if exp_goal_dim_ != lea_goal_dim_:
         print("[ERR] goal dimesion is different in two domain... can not run GAMA")
         exit()
+
+    env_ = gym.make(lea_env_name_)
 
     exp_policy_file_name_ = args['exp_policy_file_name']
 
@@ -71,6 +74,7 @@ if __name__ == "__main__":
     epochs_ = args['epochs']
     batch_size_ = args['batch_size']
     iter_size_ = args['iter_size']
+    n_log_epi_ = args['n_log_epi']
 
     lambda_1_ = args['lambda_1']
 
@@ -84,6 +88,17 @@ if __name__ == "__main__":
     f = MLP(lea_obs_dim_ - lea_goal_dim_, exp_obs_dim_ - exp_goal_dim_, f_hidden_layers_, learning_rate_, device_, f_options_).to(device=device_)
     g = MLP(exp_act_dim_, lea_act_dim_, g_hidden_layers_, learning_rate_, device_, g_options_).to(device=device_)
     D = MLP(2 * exp_obs_dim_ + exp_act_dim_ - 2 * exp_goal_dim_, 1, D_hidden_layers_, learning_rate_, device_, D_options_).to(device=device_)
+
+    def get_action(x):
+        with torch.no_grad():
+            x = torch.as_tensor(x, dtype=torch.float32).to(device=device_)
+            x_goal = x[lea_goal_offset_:lea_goal_offset_ + lea_goal_dim_]
+            x = torch.cat((x[:lea_goal_offset_], x[lea_goal_offset_ + lea_goal_dim_:]))
+            x = f(x)
+            x = torch.cat((x[:exp_goal_offset_], x_goal, x[exp_goal_offset_:]))
+            action = pi.act(x)
+            action = action.to("cpu")
+        return action
 
     exp_demo_ = load_demo(exp_demo_file_)
     lea_demo_ = load_demo(lea_demo_file_)
@@ -149,7 +164,7 @@ if __name__ == "__main__":
 
             d_input = torch.cat((sx, ax, nsx), 1)
             result1 = D(d_input)
-            loss1 = torch.mean(torch.log(result1))
+            loss1 = -torch.mean(torch.log(result1))
 
             sx_hat = f(sy)
             sx_hat_goal = torch.cat((sx_hat[:,:exp_goal_offset_], sy_goal, sx_hat[:,exp_goal_offset_:]), 1)
@@ -160,8 +175,8 @@ if __name__ == "__main__":
             d_input = torch.cat((sx_hat, ax_hat, nsx_hat), 1)
             result2 = D(d_input)
 
-            loss2 = torch.mean(torch.log(1-result2))
-            loss = -loss1 - loss2
+            loss2 = -torch.mean(torch.log(1-result2))
+            loss = loss1 + loss2
 
             loss.backward()
             D.optimizer.step()
@@ -180,16 +195,32 @@ if __name__ == "__main__":
             d_input = torch.cat((sx_hat, ax_hat, nsx_hat), 1)
             result3 = D(d_input)
 
-            loss3 = torch.mean(torch.log(result3))
+            loss3 = -torch.mean(torch.log(result3))
             loss4 = mse_loss(ay_hat, ay)
-            loss = -loss3 + lambda_1_ * loss4
+            loss = lambda_1_ * loss3 + loss4
 
             loss.backward()
             f.optimizer.step()
             g.optimizer.step()
         print("[%.3f] %d Epoch, loss1: %.3f, loss2: %.3f, loss3: %.3f, loss4: %.3f" %(time.time() - init_time_, i_epoch, loss1.item(), loss2.item(), loss3.item(), loss4.item()))
-        
-
+        o, r, d, ep_ret, ep_len, n = env_.reset(), 0, False, 0, 0, 0
+        i_epi = 0
+        tot_ep_ret = 0
+        while i_epi < n_log_epi_:
+            time.sleep(0.001)
+            a = get_action(o)
+            no, r, d, _ = env_.step(a)
+            ep_ret += r
+            ep_len += 1
+            o = no
+            if d or (ep_len == lea_epi_len_):
+                i_epi += 1
+                tot_ep_ret += ep_ret
+                o = env_.reset()
+                ep_ret = 0
+                ep_len = 0
+        print("[%.3f] # of episodes: %d, avg EpRet: %.3f" %(time.time() - init_time_, n_log_epi_, tot_ep_ret / n_log_epi_))
+    
     torch.save(P.state_dict(), result_path_ + "P.pt")
     torch.save(f.state_dict(), result_path_ + "f.pt")
     torch.save(g.state_dict(), result_path_ + "g.pt")
