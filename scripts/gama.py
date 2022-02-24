@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import yaml
 import os
-
+import time
 
 from model import MLP
 import torch.nn
@@ -20,6 +20,7 @@ def mse_loss(pred, target):
     return loss
 
 if __name__ == "__main__":
+    init_time_ = time.time()
     device_ = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # set yaml path
@@ -69,6 +70,7 @@ if __name__ == "__main__":
     learning_rate_ = args['learning_rate']
     epochs_ = args['epochs']
     batch_size_ = args['batch_size']
+    iter_size_ = args['iter_size']
 
     lambda_1_ = args['lambda_1']
 
@@ -86,107 +88,106 @@ if __name__ == "__main__":
     exp_demo_ = load_demo(exp_demo_file_)
     lea_demo_ = load_demo(lea_demo_file_)
     # train dynamics model
-    for i_epoch in range(epochs_):
-        P.optimizer.zero_grad()
-        # select batch from lea domain
-        sy, ay, nsy = sample_demo(lea_demo_, batch_size_)
+    i_epoch = 0
+    while i_epoch < epochs_:
+        i_epoch += 1
+        for _ in range(iter_size_):
+            P.optimizer.zero_grad()
+            # select batch from lea domain
+            sy, ay, nsy = sample_demo(lea_demo_, batch_size_)
 
-        if lea_goal_:
-            sy_goal, sy = separate_goal(sy, lea_goal_offset_, lea_goal_dim_)
-            nsy_goal, nsy = separate_goal(nsy, lea_goal_offset_, lea_goal_dim_)
-        sy_goal = tensor_from_numpy(sy_goal, device_)
-        sy = tensor_from_numpy(sy, device_)
-        ay = tensor_from_numpy(ay, device_)
-        nsy_goal = tensor_from_numpy(nsy_goal, device_)
-        nsy = tensor_from_numpy(nsy, device_)
+            if lea_goal_:
+                sy_goal, sy = separate_goal(sy, lea_goal_offset_, lea_goal_dim_)
+                nsy_goal, nsy = separate_goal(nsy, lea_goal_offset_, lea_goal_dim_)
+            sy_goal = tensor_from_numpy(sy_goal, device_)
+            sy = tensor_from_numpy(sy, device_)
+            ay = tensor_from_numpy(ay, device_)
+            nsy_goal = tensor_from_numpy(nsy_goal, device_)
+            nsy = tensor_from_numpy(nsy, device_)
 
-        
-        
-        p_input = torch.cat((sy, ay), 1)
-        nsy_hat = P(p_input)
-        print(nsy.shape)
-        print(nsy_hat.shape)
-        loss = mse_loss(nsy_hat, nsy)
-        loss.backward()
-        P.optimizer.step()
-        print(loss.item())
+            p_input = torch.cat((sy, ay), 1)
+            nsy_hat = P(p_input)
+            loss = mse_loss(nsy_hat, nsy)
+            loss.backward()
+            P.optimizer.step()
 
+        if loss.item() < 1e-4:
+            break
+        print("[%.3f] %d Epoch, loss: %.3f" %(time.time() - init_time_, i_epoch, loss.item()))
     
-    for i_epoch in range(epochs_):
-        P.optimizer.zero_grad()
-        f.optimizer.zero_grad()
-        g.optimizer.zero_grad()
-        D.optimizer.zero_grad()
+    i_epoch = 0
+    while i_epoch < epochs_:
+        i_epoch += 1
+        for _ in range(iter_size_):
+            P.optimizer.zero_grad()
+            f.optimizer.zero_grad()
+            g.optimizer.zero_grad()
+            D.optimizer.zero_grad()
 
-        sx, ax, nsx = sample_demo(exp_demo_, batch_size_)
-        sy, ay, nsy = sample_demo(lea_demo_, batch_size_)
-        
-        if exp_goal_:
-            sx_goal, sx = separate_goal(sx, exp_goal_offset_, exp_goal_dim_)
-            nsx_goal, nsx = separate_goal(nsx, exp_goal_offset_, exp_goal_dim_)
-        if lea_goal_:
-            sy_goal, sy = separate_goal(sy, lea_goal_offset_, lea_goal_dim_)
-            nsy_goal, nsy = separate_goal(nsy, lea_goal_offset_, lea_goal_dim_)
+            sx, ax, nsx = sample_demo(exp_demo_, batch_size_)
+            sy, ay, nsy = sample_demo(lea_demo_, batch_size_)
+            
+            if exp_goal_:
+                sx_goal, sx = separate_goal(sx, exp_goal_offset_, exp_goal_dim_)
+                nsx_goal, nsx = separate_goal(nsx, exp_goal_offset_, exp_goal_dim_)
+            if lea_goal_:
+                sy_goal, sy = separate_goal(sy, lea_goal_offset_, lea_goal_dim_)
+                nsy_goal, nsy = separate_goal(nsy, lea_goal_offset_, lea_goal_dim_)
 
-        sx_goal = tensor_from_numpy(sx_goal, device_)
-        sx = tensor_from_numpy(sx, device_)
-        ax = tensor_from_numpy(ax, device_)
-        nsx_goal = tensor_from_numpy(nsx_goal, device_)
-        nsx = tensor_from_numpy(nsx, device_)
+            sx_goal = tensor_from_numpy(sx_goal, device_)
+            sx = tensor_from_numpy(sx, device_)
+            ax = tensor_from_numpy(ax, device_)
+            nsx_goal = tensor_from_numpy(nsx_goal, device_)
+            nsx = tensor_from_numpy(nsx, device_)
 
-        sy_goal = tensor_from_numpy(sy_goal, device_)
-        sy = tensor_from_numpy(sy, device_)
-        ay = tensor_from_numpy(ay, device_)
-        nsy_goal = tensor_from_numpy(nsy_goal, device_)
-        nsy = tensor_from_numpy(nsy, device_)
+            sy_goal = tensor_from_numpy(sy_goal, device_)
+            sy = tensor_from_numpy(sy, device_)
+            ay = tensor_from_numpy(ay, device_)
+            nsy_goal = tensor_from_numpy(nsy_goal, device_)
+            nsy = tensor_from_numpy(nsy, device_)
 
 
-        d_input = torch.cat((sx, ax, nsx), 1)
-        result1 = D(d_input)
-        loss1 = torch.mean(torch.log(result1))
+            d_input = torch.cat((sx, ax, nsx), 1)
+            result1 = D(d_input)
+            loss1 = torch.mean(torch.log(result1))
 
-        sx_hat = f(sy)
-        sx_hat_goal = torch.cat((sx_hat[:,:exp_goal_offset_], sy_goal, sx_hat[:,exp_goal_offset_:]), 1)
-        ax_hat = pi.act(sx_hat_goal)
-        ay_hat = g(ax_hat)
-        nsx_hat = f(P(torch.cat((sy, g(ax_hat)), 1)))
-        
-        d_input = torch.cat((sx_hat, ax_hat, nsx_hat), 1)
-        result2 = D(d_input)
+            sx_hat = f(sy)
+            sx_hat_goal = torch.cat((sx_hat[:,:exp_goal_offset_], sy_goal, sx_hat[:,exp_goal_offset_:]), 1)
+            ax_hat = pi.act(sx_hat_goal)
+            ay_hat = g(ax_hat)
+            nsx_hat = f(P(torch.cat((sy, g(ax_hat)), 1)))
+            
+            d_input = torch.cat((sx_hat, ax_hat, nsx_hat), 1)
+            result2 = D(d_input)
 
-        loss2 = torch.mean(torch.log(1-result2))
-        loss = loss1 + loss2
+            loss2 = torch.mean(torch.log(1-result2))
+            loss = -loss1 - loss2
 
-        loss.backward()
-        D.optimizer.step()
+            loss.backward()
+            D.optimizer.step()
 
-        P.optimizer.zero_grad()
-        f.optimizer.zero_grad()
-        g.optimizer.zero_grad()
-        D.optimizer.zero_grad()
+            P.optimizer.zero_grad()
+            f.optimizer.zero_grad()
+            g.optimizer.zero_grad()
+            D.optimizer.zero_grad()
 
-        sx_hat = f(sy)
-        sx_hat_goal = torch.cat((sx_hat[:,:exp_goal_offset_], sy_goal, sx_hat[:,exp_goal_offset_:]), 1)
-        ax_hat = pi.act(sx_hat_goal)
-        ay_hat = g(ax_hat)
-        nsx_hat = f(P(torch.cat((sy, g(ax_hat)), 1)))
-        
-        d_input = torch.cat((sx_hat, ax_hat, nsx_hat), 1)
-        result3 = D(d_input)
+            sx_hat = f(sy)
+            sx_hat_goal = torch.cat((sx_hat[:,:exp_goal_offset_], sy_goal, sx_hat[:,exp_goal_offset_:]), 1)
+            ax_hat = pi.act(sx_hat_goal)
+            ay_hat = g(ax_hat)
+            nsx_hat = f(P(torch.cat((sy, g(ax_hat)), 1)))
+            
+            d_input = torch.cat((sx_hat, ax_hat, nsx_hat), 1)
+            result3 = D(d_input)
 
-        loss3 = torch.mean(torch.log(result3))
-        loss4 = mse_loss(ay_hat, ay)
-        loss = loss3 + lambda_1_ * loss4
+            loss3 = torch.mean(torch.log(result3))
+            loss4 = mse_loss(ay_hat, ay)
+            loss = -loss3 + lambda_1_ * loss4
 
-        print("loss1: %.3f, loss2: %.3f, loss3: %.3f, loss4: %.3f" %(loss1.item(), loss2.item(), loss3.item(), loss4.item()))
-
-        loss.backward()
-        # print(f.fc[0].weight.grad)
-        # for n,p in f.named_parameters():
-        #     print(p.grad.abs().mean())
-        f.optimizer.step()
-        g.optimizer.step()
-        print(i_epoch)
+            loss.backward()
+            f.optimizer.step()
+            g.optimizer.step()
+        print("[%.3f] %d Epoch, loss1: %.3f, loss2: %.3f, loss3: %.3f, loss4: %.3f" %(time.time() - init_time_, i_epoch, loss1.item(), loss2.item(), loss3.item(), loss4.item()))
         
 
     torch.save(P.state_dict(), result_path_ + "P.pt")

@@ -7,6 +7,7 @@ import torch
 def sample_demo(X, n):
     N = len(X)
     rt = np.random.randint(N, size= n)
+    print(rt)
     return X['obs'][rt], X['act'][rt], X['nobs'][rt]
 
 def sample_batch(X, n):
@@ -44,11 +45,9 @@ def load_demo(file_name):
             rt_obs.append(obs[i_epi][i])
             rt_act.append(act[i_epi][i])
             rt_nobs.append(nobs[i_epi][i])
-    print("debug1")
     rt_obs = np.array(rt_obs)
     rt_act = np.array(rt_act)
     rt_nobs = np.array(rt_nobs)
-    print("debug2")
     return {'obs': rt_obs, 'act': rt_act, 'nobs': rt_nobs}
 
 def check_path(path_name):
