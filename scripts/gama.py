@@ -145,7 +145,19 @@ if __name__ == "__main__":
         result1 = D(d_input)
         loss1 = torch.mean(torch.log(result1))
 
-        loss1.backward()
+        sx_hat = f(sy)
+        sx_hat_goal = torch.cat((sx_hat[:,:exp_goal_offset_], sy_goal, sx_hat[:,exp_goal_offset_:]), 1)
+        ax_hat = pi.act(sx_hat_goal)
+        ay_hat = g(ax_hat)
+        nsx_hat = f(P(torch.cat((sy, g(ax_hat)), 1)))
+        
+        d_input = torch.cat((sx_hat, ax_hat, nsx_hat), 1)
+        result2 = D(d_input)
+
+        loss2 = torch.mean(torch.log(1-result2))
+        loss = loss1 + loss2
+
+        loss.backward()
         D.optimizer.step()
 
         P.optimizer.zero_grad()
@@ -160,13 +172,13 @@ if __name__ == "__main__":
         nsx_hat = f(P(torch.cat((sy, g(ax_hat)), 1)))
         
         d_input = torch.cat((sx_hat, ax_hat, nsx_hat), 1)
-        result2 = D(d_input)
+        result3 = D(d_input)
 
-        loss2 = torch.mean(torch.log(1-result2))
-        loss3 = mse_loss(ay_hat, ay)
-        loss = loss2 + lambda_1_ * loss3
+        loss3 = torch.mean(torch.log(result3))
+        loss4 = mse_loss(ay_hat, ay)
+        loss = loss3 + lambda_1_ * loss4
 
-        print("loss1: %.3f, loss2: %.3f, loss3: %.3f" %(loss1.item(), loss2.item(), loss3.item()))
+        print("loss1: %.3f, loss2: %.3f, loss3: %.3f, loss4: %.3f" %(loss1.item(), loss2.item(), loss3.item(), loss4.item()))
 
         loss.backward()
         # print(f.fc[0].weight.grad)
