@@ -75,6 +75,7 @@ if __name__ == "__main__":
     batch_size_ = args['batch_size']
     iter_size_ = args['iter_size']
     n_log_epi_ = args['n_log_epi']
+    save_interval_ = args['save_interval']
 
     lambda_1_ = args['lambda_1']
 
@@ -220,8 +221,9 @@ if __name__ == "__main__":
                 ep_ret = 0
                 ep_len = 0
         print("[%.3f] # of episodes: %d, avg EpRet: %.3f" %(time.time() - init_time_, n_log_epi_, tot_ep_ret / n_log_epi_))
-    
-    torch.save(P.state_dict(), result_path_ + "P.pt")
-    torch.save(f.state_dict(), result_path_ + "f.pt")
-    torch.save(g.state_dict(), result_path_ + "g.pt")
-    torch.save(D.state_dict(), result_path_ + "D.pt")
+        if i_epoch % save_interval_ == 0:
+            torch.save(P.state_dict(), result_path_ + "P.pt")
+            torch.save(f.state_dict(), result_path_ + "f.pt")
+            torch.save(g.state_dict(), result_path_ + "g.pt")
+            torch.save(D.state_dict(), result_path_ + "D.pt")
+            print("[%.3f] SAVE MODEL!!" %(time.time() - init_time_))
