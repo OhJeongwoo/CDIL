@@ -7,7 +7,7 @@ import time
 import matplotlib.pyplot as plt
 
 
-from model import MLP, SACCore
+from model import MLP, PPOCore
 import torch.nn
 from utils import *
 from replay_buffer import ReplayBuffer
@@ -78,11 +78,15 @@ if __name__ == "__main__":
     update_every_ = args['update_every']
     save_interval_ = args['save_interval']
     seed_ = args['seed']
+    train_pi_iters_ = args['train_pi_iters']
+    train_v_iters_ = args['train_v_iters']
 
     lambda_1_ = args['lambda_1']
     gamma_ = args['gamma']
     alpha_ = args['alpha']
     polyak_ = args['polyak']
+    clip_ratio_ = args['clip_ratio']
+    target_kl_ = args['target_kl']
 
 
     # hyperparameter setting
@@ -90,85 +94,62 @@ if __name__ == "__main__":
     # initialize environment
     np.random.seed(seed_)
 
-    ac_ = SACCore(exp_obs_dim_, exp_act_dim_, hidden_layers_, learning_rate_, act_limit_, device_, options_).to(device_)
+    ac_ = PPOCore(exp_obs_dim_, exp_act_dim_, hidden_layers_, learning_rate_, act_limit_, device_, options_).to(device_)
     ac_tar_ = deepcopy(ac_)
 
     for p in ac_tar_.parameters():
         p.requires_grad = False
     
-    replay_buffer_ = ReplayBuffer(exp_obs_dim_, exp_act_dim_, replay_size_, device_)
-
-    def compute_loss_q(data):
-        o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
-        q1 = ac_.q1(o,a)
-        q2 = ac_.q2(o,a)
-
-        # Bellman backup for Q functions
-        with torch.no_grad():
-            # Target actions come from *current* policy
-            a2, logp_a2 = ac_.pi(o2)
-
-            # Target Q-values
-            q1_pi_tar = ac_tar_.q1(o2, a2)
-            q2_pi_tar = ac_tar_.q2(o2, a2)
-            q_pi_tar = torch.min(q1_pi_tar, q2_pi_tar)
-            backup = r + gamma_ * (1 - d) * (q_pi_tar - alpha_ * logp_a2)
-
-        # MSE loss against Bellman backup
-        loss_q1 = ((q1 - backup)**2).mean()
-        loss_q2 = ((q2 - backup)**2).mean()
-        loss_q = loss_q1 + loss_q2
-
-        # Useful info for logging
-        q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
-                      Q2Vals=q2.detach().cpu().numpy())
-
-        return loss_q, q_info
+    replay_buffer_ = ReplayBuffer(exp_obs_dim_, exp_act_dim_, update_every_, device_)
 
     def compute_loss_pi(data):
-        o = data['obs']
-        pi, logp_pi = ac_.pi(o)
-        q1_pi = ac_.q1(o, pi)
-        q2_pi = ac_.q2(o, pi)
-        q_pi = torch.min(q1_pi, q2_pi)
+        obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
-        # Entropy-regularized policy loss
-        loss_pi = (alpha_ * logp_pi - q_pi).mean()
+        # Policy loss
+        pi, logp = ac_.pi(obs, act)
+        ratio = torch.exp(logp - logp_old)
+        clip_adv = torch.clamp(ratio, 1-clip_ratio_, 1+clip_ratio_) * adv
+        loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
 
-        # Useful info for logging
-        pi_info = dict(LogPi=logp_pi.detach().cpu().numpy())
+        # Useful extra info
+        approx_kl = (logp_old - logp).mean().item()
+        ent = pi.entropy().mean().item()
+        clipped = ratio.gt(1+clip_ratio_) | ratio.lt(1-clip_ratio_)
+        clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
+        pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
 
         return loss_pi, pi_info
 
+    def compute_loss_v(data):
+        obs, ret = data['obs'], data['ret']
+        return ((ac_.v(obs) - ret)**2).mean()
+
     def update(data):
-        ac_.q1.optimizer.zero_grad()
-        ac_.q2.optimizer.zero_grad()
-        loss_q, q_info = compute_loss_q(data)
-        loss_q.backward()
-        ac_.q1.optimizer.step()
-        ac_.q2.optimizer.step()
+        pi_l_old, pi_info_old = compute_loss_pi(data)
+        pi_l_old = pi_l_old.item()
+        v_l_old = compute_loss_v(data).item()
+
+        # Train policy with multiple steps of gradient descent
+        for i in range(train_pi_iters_):
+            ac_.pi.optimizer.zero_grad()
+            loss_pi, pi_info = compute_loss_pi(data)
+            kl = pi_info['kl']
+            if kl > 1.5 * target_kl_:
+                print('Early stopping at step %d due to reaching max kl.'%i)
+                break
+            loss_pi.backward()
+            ac_.pi.optimizer.step()
+
+        # Value function learning
+        for i in range(train_v_iters_):
+            ac_.v.optimizer.zero_grad()
+            loss_v = compute_loss_v(data)
+            loss_v.backward()
+            ac_.v.optimizer.step()
+
+        # Log changes from update
+        kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
         
-        for p in ac_.q1.parameters():
-            p.requires_grad = False
-        for p in ac_.q2.parameters():
-            p.requires_grad = False
-
-        ac_.pi.optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(data)
-        loss_pi.backward()
-        ac_.pi.optimizer.step()
-
-        for p in ac_.q1.parameters():
-            p.requires_grad = True
-        for p in ac_.q2.parameters():
-            p.requires_grad = True
-
-        with torch.no_grad():
-            for p, p_targ in zip(ac_.parameters(), ac_tar_.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_(polyak_)
-                p_targ.data.add_((1 - polyak_) * p.data)
 
     def get_action(o, remove_grad=True):
         a = ac_.act(torch.unsqueeze(torch.as_tensor(o, dtype=torch.float32), dim=0).to(device=device_))

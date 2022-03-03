@@ -7,7 +7,7 @@ import time
 import matplotlib.pyplot as plt
 
 
-from model import MLP, SACCore
+from model import MLP, DDPGCore
 import torch.nn
 from utils import *
 from replay_buffer import ReplayBuffer
@@ -33,7 +33,7 @@ if __name__ == "__main__":
     exp_name_ = args['exp_name']
     result_path_ = RESULT_PATH + exp_name_ + "/"
     check_path(result_path_)
-
+    
     exp_env_name_ = args['exp_env_name']
     exp_obs_dim_, exp_act_dim_ = get_env_dim(exp_env_name_)
     exp_goal_ = args['exp_goal']
@@ -90,7 +90,7 @@ if __name__ == "__main__":
     # initialize environment
     np.random.seed(seed_)
 
-    ac_ = SACCore(exp_obs_dim_, exp_act_dim_, hidden_layers_, learning_rate_, act_limit_, device_, options_).to(device_)
+    ac_ = DDPGCore(exp_obs_dim_, exp_act_dim_, hidden_layers_, learning_rate_, act_limit_, device_, options_).to(device_)
     ac_tar_ = deepcopy(ac_)
 
     for p in ac_tar_.parameters():
@@ -100,75 +100,57 @@ if __name__ == "__main__":
 
     def compute_loss_q(data):
         o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
-        q1 = ac_.q1(o,a)
-        q2 = ac_.q2(o,a)
 
-        # Bellman backup for Q functions
+        q = ac_.q(o,a)
+
+        # Bellman backup for Q function
         with torch.no_grad():
-            # Target actions come from *current* policy
-            a2, logp_a2 = ac_.pi(o2)
-
-            # Target Q-values
-            q1_pi_tar = ac_tar_.q1(o2, a2)
-            q2_pi_tar = ac_tar_.q2(o2, a2)
-            q_pi_tar = torch.min(q1_pi_tar, q2_pi_tar)
-            backup = r + gamma_ * (1 - d) * (q_pi_tar - alpha_ * logp_a2)
+            q_pi_tar = ac_tar_.q(o2, ac_tar_.pi(o2))
+            backup = r + gamma_ * (1 - d) * q_pi_tar
 
         # MSE loss against Bellman backup
-        loss_q1 = ((q1 - backup)**2).mean()
-        loss_q2 = ((q2 - backup)**2).mean()
-        loss_q = loss_q1 + loss_q2
+        loss_q = ((q - backup)**2).mean()
 
         # Useful info for logging
-        q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
-                      Q2Vals=q2.detach().cpu().numpy())
+        loss_info = dict(QVals=q.detach().cpu().numpy())
 
-        return loss_q, q_info
+        return loss_q, loss_info
 
     def compute_loss_pi(data):
         o = data['obs']
-        pi, logp_pi = ac_.pi(o)
-        q1_pi = ac_.q1(o, pi)
-        q2_pi = ac_.q2(o, pi)
-        q_pi = torch.min(q1_pi, q2_pi)
-
-        # Entropy-regularized policy loss
-        loss_pi = (alpha_ * logp_pi - q_pi).mean()
-
-        # Useful info for logging
-        pi_info = dict(LogPi=logp_pi.detach().cpu().numpy())
-
-        return loss_pi, pi_info
+        q_pi = ac_.q(o, ac_.pi(o))
+        return -q_pi.mean()
 
     def update(data):
-        ac_.q1.optimizer.zero_grad()
-        ac_.q2.optimizer.zero_grad()
-        loss_q, q_info = compute_loss_q(data)
+        # First run one gradient descent step for Q.
+        ac_.q.optimizer.zero_grad()
+        loss_q, loss_info = compute_loss_q(data)
         loss_q.backward()
-        ac_.q1.optimizer.step()
-        ac_.q2.optimizer.step()
-        
-        for p in ac_.q1.parameters():
-            p.requires_grad = False
-        for p in ac_.q2.parameters():
+        ac_.q.optimizer.step()
+
+        # Freeze Q-network so you don't waste computational effort 
+        # computing gradients for it during the policy learning step.
+        for p in ac_.q.parameters():
             p.requires_grad = False
 
+        # Next run one gradient descent step for pi.
         ac_.pi.optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(data)
+        loss_pi = compute_loss_pi(data)
         loss_pi.backward()
         ac_.pi.optimizer.step()
 
-        for p in ac_.q1.parameters():
-            p.requires_grad = True
-        for p in ac_.q2.parameters():
+        # Unfreeze Q-network so you can optimize it at next DDPG step.
+        for p in ac_.q.parameters():
             p.requires_grad = True
 
+        # Finally, update target networks by polyak averaging.
         with torch.no_grad():
             for p, p_targ in zip(ac_.parameters(), ac_tar_.parameters()):
                 # NB: We use an in-place operations "mul_", "add_" to update target
                 # params, as opposed to "mul" and "add", which would make new tensors.
                 p_targ.data.mul_(polyak_)
                 p_targ.data.add_((1 - polyak_) * p.data)
+
 
     def get_action(o, remove_grad=True):
         a = ac_.act(torch.unsqueeze(torch.as_tensor(o, dtype=torch.float32), dim=0).to(device=device_))

@@ -102,7 +102,31 @@ class GaussianActor(nn.Module):
         pi_action = self.act_limit * pi_action
         return  pi_action, logp_pi
 
+class DeterministicActor(nn.Module):
+    def __init__(self, obs_dim, act_dim, hidden_layers, learning_rate, act_limit, device, option):
+        super(DeterministicActor, self).__init__()
+        self.device = device
+        self.option = option
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+        self.hidden_layers = hidden_layers
+        self.H = len(self.hidden_layers)
+        self.fc = nn.ModuleList([])
+        self.fc.append(nn.Linear(self.obs_dim, self.hidden_layers[0]))
+        self.lr = learning_rate
+        self.act_limit = act_limit
+        for i in range(1, self.H):
+            self.fc.append(nn.Linear(self.hidden_layers[i-1], self.hidden_layers[i]))
+        self.fc.append(nn.Linear(self.hidden_layers[self.H - 1], self.act_dim))
+        self.optimizer = optim.Adam(self.parameters(), lr = self.lr)
 
+    def forward(self, x):
+        for i in range(0, self.H):
+            x = F.relu(self.fc[i](x))
+        x = self.fc[self.H](x)
+        x = torch.tanh(x)
+        x = self.act_limit * x
+        return x
 
 class QFunction(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_layers, learning_rate, device, option):
@@ -129,6 +153,29 @@ class QFunction(nn.Module):
         return torch.squeeze(q, -1)
 
 
+class VFunction(nn.Module):
+    def __init__(self, obs_dim, hidden_layers, learning_rate, device, option):
+        super(VFunction, self).__init__()
+        self.device = device
+        self.option = option
+        self.obs_dim = obs_dim
+        self.hidden_layers = hidden_layers
+        self.H = len(self.hidden_layers)
+        self.fc = nn.ModuleList([])
+        self.fc.append(nn.Linear(self.obs_dim, self.hidden_layers[0]))
+        self.lr = learning_rate
+        for i in range(1, self.H):
+            self.fc.append(nn.Linear(self.hidden_layers[i-1], self.hidden_layers[i]))
+        self.fc.append(nn.Linear(self.hidden_layers[self.H - 1], 1))
+        self.optimizer = optim.Adam(self.parameters(), lr = self.lr)
+
+    def forward(self, x):
+        for i in range(0, self.H):
+            x = F.relu(self.fc[i](x))
+        v = self.fc[self.H](x)
+        return torch.squeeze(q, -1)
+
+
 class SACCore(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_layers, learning_rate, act_limit, device, option):
         super(SACCore, self).__init__()
@@ -150,4 +197,36 @@ class SACCore(nn.Module):
 
 class DDPGCore(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_layers, learning_rate, act_limit, device, option):
-        
+        super(DDPGCore, self).__init__()
+        self.device = device
+        self.option = option
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+        self.hidden_layers = hidden_layers
+        self.H = len(self.hidden_layers)
+        self.lr = learning_rate
+        self.act_limit = act_limit
+        self.pi = GaussianActor(obs_dim, act_dim, hidden_layers, learning_rate, act_limit, device, option)
+        self.q = QFunction(obs_dim, act_dim, hidden_layers, learning_rate, device, option)
+
+    def act(self, obs):
+        a, _ = self.pi(obs)
+        return a
+
+class PPOCore(nn.Module):
+    def __init__(self, obs_dim, act_dim, hidden_layers, learning_rate, act_limit, device, option):
+        super(PPOCore, self).__init__()
+        self.device = device
+        self.option = option
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+        self.hidden_layers = hidden_layers
+        self.H = len(self.hidden_layers)
+        self.lr = learning_rate
+        self.act_limit = act_limit
+        self.pi = GaussianActor(obs_dim, act_dim, hidden_layers, learning_rate, act_limit, device, option)
+        self.v = VFunction(obs_dim, hidden_layers, learning_rate, device, option)
+
+    def act(self, obs):
+        a, _ = self.pi(obs)
+        return a
