@@ -1,12 +1,16 @@
 import torch
 import yaml
 import os
+import sys
 import gym
 
 from model import MLP
 from torch.nn import MSELoss
 
 from utils import sample_batch, get_env_dim, load_demo, sample_demo, check_path, separate_goal
+
+sys.path.append(os.getcwd() + '/..')
+import envs
 
 PROJECT_PATH = os.path.abspath("..")
 POLICY_PATH = PROJECT_PATH + "/policy/"

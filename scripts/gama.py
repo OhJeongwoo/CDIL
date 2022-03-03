@@ -2,12 +2,16 @@ import torch
 import numpy as np
 import yaml
 import os
+import sys
 import time
 
 from model import MLP
 import torch.nn
 # from utils import sample_batch, get_env_dim, load_demo, sample_demo, check_path, separate_goal, tensor_from_numpy
 from utils import *
+sys.path.append(os.getcwd() + '/..')
+import envs
+
 PROJECT_PATH = os.path.abspath("..")
 POLICY_PATH = PROJECT_PATH + "/policy/"
 YAML_PATH = PROJECT_PATH + "/test.yaml"

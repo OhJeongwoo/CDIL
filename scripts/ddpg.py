@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import yaml
 import os
+import sys
 import time
 import matplotlib.pyplot as plt
 
@@ -12,6 +13,8 @@ import torch.nn
 from utils import *
 from replay_buffer import ReplayBuffer
 
+sys.path.append(os.getcwd() + '/..')
+import envs
 
 PROJECT_PATH = os.path.abspath("..")
 POLICY_PATH = PROJECT_PATH + "/policy/"

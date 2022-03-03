@@ -7,6 +7,9 @@ import pickle
 
 from utils import get_env_dim
 
+sys.path.append(os.getcwd() + '/..')
+import envs
+
 PROJECT_PATH = os.path.abspath("..")
 POLICY_PATH = PROJECT_PATH + "/policy/"
 YAML_PATH = PROJECT_PATH + "/test.yaml"
