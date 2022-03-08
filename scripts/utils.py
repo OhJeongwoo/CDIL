@@ -9,6 +9,14 @@ def sample_demo(X, n):
     rt = np.random.randint(N, size= n)
     return X['obs'][rt], X['act'][rt], X['nobs'][rt]
 
+def sample_geometric_demo(X, n, gamma=0.99):
+    N = len(X['obs'])
+    rt = np.random.randint(N, size=n)
+    gt = np.random.geometric(p=gamma, size=n)
+    tt = rt + np.min((X['t'][rt], gt), axis=0) - 1
+    return {'s0': X['obs'][rt], 'obs': X['obs'][tt], 'act': X['act'][tt], 'nobs': X['nobs'][tt]}
+
+
 def sample_batch(X, n):
     return np.random.choice(X, n)
 
@@ -35,6 +43,7 @@ def load_demo(file_name):
     rt_obs = []
     rt_act = []
     rt_nobs = []
+    rt_t = []
     n_epi = len(obs)
     for i_epi in range(n_epi):
         epi_len = len(obs[i_epi])
@@ -42,10 +51,12 @@ def load_demo(file_name):
             rt_obs.append(obs[i_epi][i])
             rt_act.append(act[i_epi][i])
             rt_nobs.append(nobs[i_epi][i])
+            rt_t.append(epi_len - i)
     rt_obs = np.array(rt_obs)
     rt_act = np.array(rt_act)
     rt_nobs = np.array(rt_nobs)
-    return {'obs': rt_obs, 'act': rt_act, 'nobs': rt_nobs}
+    rt_t = np.array(rt_t)
+    return {'obs': rt_obs, 'act': rt_act, 'nobs': rt_nobs, 't': rt_t}
 
 def check_path(path_name):
     if not os.path.exists(path_name):

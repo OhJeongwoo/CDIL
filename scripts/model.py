@@ -48,15 +48,14 @@ class MLP(nn.Module):
     def forward(self, x):
         # forward network and return
         for i in range(0,self.H):
-            if self.option[1] == 'relu':
-                x = F.relu(self.fc[i](x))
             if self.option[1] == 'leaky-relu':
                 x = F.leaky_relu(self.fc[i](x))
-            if self.option[1] == 'sigmoid':
+            elif self.option[1] == 'sigmoid':
                 x = F.sigmoid(self.fc[i](x))
-            if self.option[1] == 'tanh':
+            elif self.option[1] == 'tanh':
                 x = F.tanh(self.fc[i](x))
-            
+            else:
+                x = F.relu(self.fc[i](x))
         x = self.fc[self.H](x)
         if self.option[2] == 'sigmoid':
             x = F.sigmoid(x)
@@ -89,8 +88,15 @@ class GaussianActor(nn.Module):
         self.optimizer = optim.Adam(self.parameters(), lr = self.lr)
 
     def forward(self, x):
-        for i in range(0, self.H):
-            x = F.relu(self.fc[i](x))
+        for i in range(0,self.H):
+            if self.option[1] == 'leaky-relu':
+                x = F.leaky_relu(self.fc[i](x))
+            elif self.option[1] == 'sigmoid':
+                x = F.sigmoid(self.fc[i](x))
+            elif self.option[1] == 'tanh':
+                x = F.tanh(self.fc[i](x))
+            else:
+                x = F.relu(self.fc[i](x))
         mu = self.mu_layer(x)
         log_std = torch.clamp(self.log_std_layer(x), LOG_STD_MIN, LOG_STD_MAX)
         std = torch.exp(log_std)
@@ -121,8 +127,15 @@ class DeterministicActor(nn.Module):
         self.optimizer = optim.Adam(self.parameters(), lr = self.lr)
 
     def forward(self, x):
-        for i in range(0, self.H):
-            x = F.relu(self.fc[i](x))
+        for i in range(0,self.H):
+            if self.option[1] == 'leaky-relu':
+                x = F.leaky_relu(self.fc[i](x))
+            elif self.option[1] == 'sigmoid':
+                x = F.sigmoid(self.fc[i](x))
+            elif self.option[1] == 'tanh':
+                x = F.tanh(self.fc[i](x))
+            else:
+                x = F.relu(self.fc[i](x))
         x = self.fc[self.H](x)
         x = torch.tanh(x)
         x = self.act_limit * x
@@ -147,11 +160,17 @@ class QFunction(nn.Module):
 
     def forward(self, obs, act):
         x = torch.cat([obs, act], dim = -1).to(self.device)
-        for i in range(0, self.H):
-            x = F.relu(self.fc[i](x))
+        for i in range(0,self.H):
+            if self.option[1] == 'leaky-relu':
+                x = F.leaky_relu(self.fc[i](x))
+            elif self.option[1] == 'sigmoid':
+                x = F.sigmoid(self.fc[i](x))
+            elif self.option[1] == 'tanh':
+                x = F.tanh(self.fc[i](x))
+            else:
+                x = F.relu(self.fc[i](x))
         q = self.fc[self.H](x)
         return torch.squeeze(q, -1)
-
 
 class VFunction(nn.Module):
     def __init__(self, obs_dim, hidden_layers, learning_rate, device, option):
@@ -170,11 +189,17 @@ class VFunction(nn.Module):
         self.optimizer = optim.Adam(self.parameters(), lr = self.lr)
 
     def forward(self, x):
-        for i in range(0, self.H):
-            x = F.relu(self.fc[i](x))
+        for i in range(0,self.H):
+            if self.option[1] == 'leaky-relu':
+                x = F.leaky_relu(self.fc[i](x))
+            elif self.option[1] == 'sigmoid':
+                x = F.sigmoid(self.fc[i](x))
+            elif self.option[1] == 'tanh':
+                x = F.tanh(self.fc[i](x))
+            else:
+                x = F.relu(self.fc[i](x))
         v = self.fc[self.H](x)
         return torch.squeeze(q, -1)
-
 
 class SACCore(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_layers, learning_rate, act_limit, device, option):
@@ -226,6 +251,24 @@ class PPOCore(nn.Module):
         self.act_limit = act_limit
         self.pi = GaussianActor(obs_dim, act_dim, hidden_layers, learning_rate, act_limit, device, option)
         self.v = VFunction(obs_dim, hidden_layers, learning_rate, device, option)
+
+    def act(self, obs):
+        a, _ = self.pi(obs)
+        return a
+
+class ValueDiceCore(nn.Module):
+    def __init__(self, obs_dim, act_dim, hidden_layers, learning_rate, act_limit, device, option):
+        super(ValueDiceCore, self).__init__()
+        self.device = device
+        self.option = option
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+        self.hidden_layers = hidden_layers
+        self.H = len(self.hidden_layers)
+        self.lr = learning_rate
+        self.act_limit = act_limit
+        self.pi = GaussianActor(obs_dim, act_dim, hidden_layers, learning_rate, act_limit, device, option)
+        self.v = QFunction(obs_dim, act_dim, hidden_layers, learning_rate, device, option)
 
     def act(self, obs):
         a, _ = self.pi(obs)

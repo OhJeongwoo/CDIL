@@ -1,0 +1,16 @@
+# experiment description
+exp_name: 'ant_4legged'
+n_episode: 1000
+
+exp_policy_file_name: 'ac_best'
+exp_demo_file_name: 'ant_4legged'
+
+# environment description
+exp_env_name: 'Ant_4legged-v0'
+exp_epi_len: 1000
+
+# seed
+seed: 1
+
+# rendering
+render: True

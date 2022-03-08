@@ -1,4 +1,5 @@
 from copy import deepcopy
+from ssl import OP_NO_TLSv1_1
 import torch
 import numpy as np
 import yaml
@@ -8,7 +9,7 @@ import time
 import matplotlib.pyplot as plt
 import argparse
 
-from model import MLP, SACCore
+from model import MLP, ValueDiceCore
 import torch.nn
 from utils import *
 from replay_buffer import ReplayBuffer
@@ -19,6 +20,8 @@ import envs
 PROJECT_PATH = os.path.abspath("..")
 POLICY_PATH = PROJECT_PATH + "/policy/"
 YAML_PATH = PROJECT_PATH + "/yaml/"
+DEMO_PATH = PROJECT_PATH + "/demo/"
+RESULT_PATH = PROJECT_PATH + "/result/"
 
 if __name__ == "__main__":
     init_time_ = time.time()
@@ -36,133 +39,113 @@ if __name__ == "__main__":
         print(args)
 
     # set hyperparameters
-    exp_name_ = args['exp_name'] # experiment name
-    check_path(POLICY_PATH + exp_name_) # check if the path exists, if not make the directory
+    exp_name_ = args['exp_name']
 
-    # set environment
     exp_env_name_ = args['exp_env_name']
     exp_obs_dim_, exp_act_dim_ = get_env_dim(exp_env_name_)
     exp_epi_len_ = args['exp_epi_len']
+    exp_demo_file_name_ = args['exp_demo_file_name']
+    exp_demo_file_ = DEMO_PATH + exp_demo_file_name_ + ".pkl"
+
+
     env_ = gym.make(exp_env_name_)
     act_limit_ = env_.action_space.high[0]
     
-    # set model
     hidden_layers_ = args['pi_hidden_layers']
     options_ = args['pi_options']
-    learning_rate_ = args['learning_rate']
     
-    # set hyperparameters of SAC
     replay_size_ = args['replay_size']
-    gamma_ = args['gamma']
-    alpha_ = args['alpha']
-    polyak_ = args['polyak']
-
-    # set training hyperparameters
+    learning_rate_ = args['learning_rate']
     epochs_ = args['epochs']
-    steps_per_epoch_ = args['steps_per_epoch']
     batch_size_ = args['batch_size']
+    iter_size_ = args['iter_size']
     n_log_epi_ = args['n_log_epi']
+    steps_per_epoch_ = args['steps_per_epoch']
     start_steps_ = args['start_steps']
     update_after_ = args['update_after']
     update_every_ = args['update_every']
     save_interval_ = args['save_interval']
-    plot_rendering_ = args['plot_rendering']
-
-    # set seed
     seed_ = args['seed']
+
+    gamma_ = args['gamma']
+    alpha_ = args['alpha']
+    
+
+    # hyperparameter setting
+
+    # initialize environment
     np.random.seed(seed_)
 
-    # create model and replay buffer
-    ac_ = SACCore(exp_obs_dim_, exp_act_dim_, hidden_layers_, learning_rate_, act_limit_, device_, options_).to(device_)
-    ac_tar_ = deepcopy(ac_)
+    ac_ = ValueDiceCore(exp_obs_dim_, exp_act_dim_, hidden_layers_, learning_rate_, act_limit_, device_, options_).to(device_)
+    exp_demo_ = load_demo(exp_demo_file_)
+    
     replay_buffer_ = ReplayBuffer(exp_obs_dim_, exp_act_dim_, replay_size_, device_)
 
-    # target network doesn't have gradient
-    for p in ac_tar_.parameters():
-        p.requires_grad = False
-    
-    # define q loss function
-    def compute_loss_q(data):
-        o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
-        q1 = ac_.q1(o,a)
-        q2 = ac_.q2(o,a)
+    def update_v(exp_batch, cur_batch):
+        o = cur_batch['obs']
+        a = cur_batch['act']
+        o2 = cur_batch['obs2']
+        a2, _ = ac_.pi(o2)
 
-        # Bellman backup for Q functions
-        with torch.no_grad():
-            # Target actions come from *current* policy
-            a2, logp_a2 = ac_.pi(o2)
+        o0 = tensor_from_numpy(exp_batch['s0'], device_)
+        a0, _ = ac_.pi(o0)
+        oe = tensor_from_numpy(exp_batch['obs'], device_)
+        ae = tensor_from_numpy(exp_batch['act'], device_)
+        oe2 = tensor_from_numpy(exp_batch['nobs'], device_)
+        ae2, _ = ac_.pi(oe2)
 
-            # Target Q-values
-            q1_pi_tar = ac_tar_.q1(o2, a2)
-            q2_pi_tar = ac_tar_.q2(o2, a2)
-            q_pi_tar = torch.min(q1_pi_tar, q2_pi_tar)
-            backup = r + gamma_ * (1 - d) * (q_pi_tar - alpha_ * logp_a2)
+        v = ac_.v(o, a)
+        v2 = ac_.v(o2, a2)
+        v0 = ac_.v(o0, a0)
+        ve = ac_.v(oe, ae)
+        ve2 = ac_.v(oe2, ae2)
 
-        # MSE loss against Bellman backup
-        loss_q1 = ((q1 - backup)**2).mean()
-        loss_q2 = ((q2 - backup)**2).mean()
-        loss_q = loss_q1 + loss_q2
+        value_log = (1-alpha_) * torch.exp(ve - gamma_ * ve2) + alpha_ * torch.exp(v - gamma_ * v2)
+        loss_log = torch.log(torch.mean(value_log))
+        value_linear = (1-alpha_) * (1 - gamma_) * v0 + alpha_ * (v - gamma_ * v2)
+        loss_linear = torch.mean(value_linear)
+        loss = loss_log - loss_linear
+        ac_.v.optimizer.zero_grad()
+        loss.backward()
+        ac_.v.optimizer.step()
 
-        # Useful info for logging
-        q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
-                      Q2Vals=q2.detach().cpu().numpy())
+    def update_pi(exp_batch, cur_batch):
+        o = cur_batch['obs']
+        a = cur_batch['act']
+        o2 = cur_batch['obs2']
+        a2, _ = ac_.pi(o2)
 
-        return loss_q, q_info
+        o0 = tensor_from_numpy(exp_batch['s0'], device_)
+        a0, _ = ac_.pi(o0)
+        oe = tensor_from_numpy(exp_batch['obs'], device_)
+        ae = tensor_from_numpy(exp_batch['act'], device_)
+        oe2 = tensor_from_numpy(exp_batch['nobs'], device_)
+        ae2, _ = ac_.pi(oe2)
 
-    # define pi loss function
-    def compute_loss_pi(data):
-        o = data['obs']
-        pi, logp_pi = ac_.pi(o)
-        q1_pi = ac_.q1(o, pi)
-        q2_pi = ac_.q2(o, pi)
-        q_pi = torch.min(q1_pi, q2_pi)
+        v = ac_.v(o, a)
+        v2 = ac_.v(o2, a2)
+        v0 = ac_.v(o0, a0)
+        ve = ac_.v(oe, ae)
+        ve2 = ac_.v(oe2, ae2)
 
-        # Entropy-regularized policy loss
-        loss_pi = (alpha_ * logp_pi - q_pi).mean()
-
-        # Useful info for logging
-        pi_info = dict(LogPi=logp_pi.detach().cpu().numpy())
-
-        return loss_pi, pi_info
-
-    # define update function
-    def update(data):
-        ac_.q1.optimizer.zero_grad()
-        ac_.q2.optimizer.zero_grad()
-        loss_q, q_info = compute_loss_q(data)
-        loss_q.backward()
-        ac_.q1.optimizer.step()
-        ac_.q2.optimizer.step()
-        
-        for p in ac_.q1.parameters():
-            p.requires_grad = False
-        for p in ac_.q2.parameters():
-            p.requires_grad = False
-
+        value_log = (1-alpha_) * torch.exp(ve - gamma_ * ve2) + alpha_ * torch.exp(v - gamma_ * v2)
+        loss_log = torch.log(torch.mean(value_log))
+        value_linear = (1-alpha_) * (1 - gamma_) * v0 + alpha_ * (v - gamma_ * v2)
+        loss_linear = torch.mean(value_linear)
+        loss = loss_log - loss_linear
+        loss = -loss
         ac_.pi.optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(data)
-        loss_pi.backward()
+        loss.backward()
         ac_.pi.optimizer.step()
 
-        for p in ac_.q1.parameters():
-            p.requires_grad = True
-        for p in ac_.q2.parameters():
-            p.requires_grad = True
-
-        with torch.no_grad():
-            for p, p_targ in zip(ac_.parameters(), ac_tar_.parameters()):
-                # NB: We use an in-place operations "mul_", "add_" to update target
-                # params, as opposed to "mul" and "add", which would make new tensors.
-                p_targ.data.mul_(polyak_)
-                p_targ.data.add_((1 - polyak_) * p.data)
-
+        
     def get_action(o, remove_grad=True):
         a = ac_.act(torch.unsqueeze(torch.as_tensor(o, dtype=torch.float32), dim=0).to(device=device_))
         if remove_grad:
             return a.detach().cpu().numpy()
         return a
 
-    # for evaluation in each epoch
+        
     def test_agent():
         tot_ep_ret = 0.0
         for _ in range(n_log_epi_):
@@ -185,6 +168,7 @@ if __name__ == "__main__":
 
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
+        
         # Until start_steps have elapsed, randomly sample actions
         # from a uniform distribution for better exploration. Afterwards, 
         # use the learned policy. 
@@ -217,8 +201,13 @@ if __name__ == "__main__":
         # Update handling
         if t >= update_after_ and t % update_every_ == 0:
             for j in range(update_every_):
-                batch = replay_buffer_.sample_batch(batch_size_)
-                update(data=batch)
+                exp_batch = sample_geometric_demo(exp_demo_, batch_size_, gamma_)
+                cur_batch = replay_buffer_.sample_batch(batch_size_)
+                update_v(exp_batch, cur_batch)
+
+                exp_batch = sample_geometric_demo(exp_demo_, batch_size_, gamma_)
+                cur_batch = replay_buffer_.sample_batch(batch_size_)
+                update_pi(exp_batch, cur_batch)
 
         # End of epoch handling
         if (t+1) % steps_per_epoch_ == 0:
@@ -232,6 +221,5 @@ if __name__ == "__main__":
                 max_avg_rt = avg_rt
                 torch.save(ac_, POLICY_PATH + exp_name_ + "/ac_best.pt")    
             print("[%.3f] Epoch: %d, Timesteps: %d, AvgEpReward: %.3f" %(time.time() - init_time_, epoch, t+1, avg_rt))
-            if plot_rendering_:
-                plt.plot(ts_axis, rt_axis)
-                plt.pause(0.001)
+            plt.plot(ts_axis, rt_axis)
+            plt.pause(0.001)
