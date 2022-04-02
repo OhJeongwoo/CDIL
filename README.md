@@ -22,4 +22,25 @@ You can import your custom code with the follow code.
 env = gym.make({YOUR_ENV_NAME})
 ```
 
-Before importing the environment, you need to register the environment. Please open /envs/__init__.py code. You can see the registered environment in this code. You register your environment similar to the others, then it works. 
+Before importing the environment, you need to register the environment. Please open "/envs/__init__.py code". You can see the registered environment in this code. You register your environment similar to the others, then it works. 
+
+
+## Writing your algorithm scripts
+
+In sac.py example, it constitutes the following process.
+
+1. Load yaml which contains hyperparameter information.
+
+2. Set hyperparameter and make environment.
+
+3. Define model, loss function, update rule.
+
+4. Training with exploration environment.
+
+You can find yaml file from /yaml/*.yaml. And models are defined by scripts/model.py
+
+example command is the following.
+
+```
+python sac.py --yaml sac_ant_4legged
+```
