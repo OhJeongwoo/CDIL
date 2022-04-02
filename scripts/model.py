@@ -67,7 +67,6 @@ class MLP(nn.Module):
     def mse_loss(self, z, action):
         return self.loss(z, action)
 
-
 class GaussianActor(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden_layers, learning_rate, act_limit, device, option):
         super(GaussianActor, self).__init__()
